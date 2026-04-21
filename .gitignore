@@ -1,0 +1,15 @@
+# Python environments
+venv/
+env/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Ignore intermediate script copies and logs
+script.py
+script_clean.py
+experiments.log
+
+# Ignore heavy output files so you don't bloat your GitHub repo
+# (but keep the results folder structure)
+results/*.pkl
