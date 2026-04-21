@@ -11,12 +11,12 @@ This codebase tests whether the improvements in SAC-PER are due to PER or co-bun
 
 ## Repository Structure 
 - `SAC_SACPER_Ablation_Study.ipynb`: Main interactive notebook detailing the architecture and final visualizations.
-- `beast_script.py and laptop_script.py`: The exported pure-Python multithreading script designed for zero-bottleneck terminal execution.
+- `train_cluster.py and train_local.py`: The exported pure-Python multithreading script designed for zero-bottleneck terminal execution.
 - `requirements.txt`: Necessary dependencies (`torch`, `gymnasium`, etc.).
 
 ## Setup
 
-1. Clone the repository natively on your beast machine.
+1. Clone the repository natively on your high-end workstation/cluster.
 2. Initialize a Python virtual environment:
    ```bash
    python -m venv venv
@@ -32,14 +32,14 @@ This codebase tests whether the improvements in SAC-PER are due to PER or co-bun
 To run all 24 configurations simultaneously (8 experiments × 3 seeds):
 
 ```bash
-python beast_script.py and laptop_script.py
+python train_cluster.py and train_local.py
 ```
 
 This will run silently and natively lock Python to 1 PyTorch thread per worker so the CPU handles the 24 parallel streams effortlessly. All completed runs will automatically deposit `.pkl` log data into the `results/` directory.
 
 ## Graphing
 
-Once `beast_script.py and laptop_script.py` finishes your full simulation sweeps:
+Once `train_cluster.py and train_local.py` finishes your full simulation sweeps:
 1. Open `SAC_SACPER_Ablation_Study.ipynb` locally.
 2. Skip the cell that runs the agent experiments. 
 3. Execute the final plotting cells at the bottom to aggregate everything directly from your loaded `results/` folder and generate the graphs.
