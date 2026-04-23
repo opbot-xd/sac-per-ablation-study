@@ -73,7 +73,7 @@ except ImportError:
     print("cpprb not found — using pure-Python PER (slower but works)")
 
 torch.set_flush_denormal(True)
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device("cpu")
 print(f"Device: {DEVICE}")
 if DEVICE.type == "cuda":
     print(f"GPU: {torch.cuda.get_device_name(0)}")
