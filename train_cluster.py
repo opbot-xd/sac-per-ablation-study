@@ -686,6 +686,12 @@ def train_one_seed(cfg: ExpConfig, seed: int, results_dir: str = "results") -> d
         if step >= cfg.warmup_steps and step % cfg.update_every == 0:
             update_info = agent.update(step)
 
+        # Heartbeat to show training progress
+        if step > 0 and step % 10_000 == 0 and step % EVAL_EVERY != 0:
+            elapsed = time.time() - t0
+            eta = elapsed / step * (cfg.total_steps - step)
+            print(f"      [heartbeat] {cfg.name} seed={seed} | step {step:>7,} | ETA {int(eta)//60}m")
+
         # ── Evaluation ─────────────────────────────────────────────────────
         if step >= next_eval:
             mr, sr, qb, per_ep_rets = evaluate_with_metrics(agent, eenv)
@@ -860,4 +866,206 @@ if __name__ == '__main__':
     # Using 20 workers to leave some overhead for the OS and context switching
     # on an i9 with 24 threads and 100GB RAM, this is still extremely fast!
     all_logs = run_all_experiments(max_workers=20)
+
+    # ── Post-processing and Plotting ─────────────────────────────────────────
+    print("\nStarting post-processing and plotting...")
+    agg = {name: aggregate(logs) for name, logs in all_logs.items() if logs}
+    print("Aggregated across seeds:")
+    for name, a in agg.items():
+        if a is not None and len(a["mean_r"]):
+            final = a["mean_r"][-1]
+            print(f"  {name:15s}  final_return={final:>8.2f}  n_seeds={a['n_seeds']}")
+
+    # Plot settings
+    COLORS = {
+        "SAC_orig":    "#E24B4A", "SAC_fixed":   "#185FA5",
+        "SACPER_a03":  "#1D9E75", "SACPER_a06":  "#EF9F27",
+        "SACPER_n3":   "#533FAD", "SACPER_n5":   "#A8428C",
+        "SAC_rewnorm": "#5E8C8A", "SACPER_lam":  "#63781E",
+    }
+    LABELS = {
+        "SAC_orig":    "SAC (original)", "SAC_fixed":   "SAC + stability fixes",
+        "SACPER_a03":  "SACPER  α=0.3  (corrected)", "SACPER_a06":  "SACPER  α=0.6  (buggy exponent)",
+        "SACPER_n3":   "SACPER  α=0.3  n=3", "SACPER_n5":   "SACPER  α=0.3  n=5",
+        "SAC_rewnorm": "SAC + reward normalisation", "SACPER_lam":  "SACPER  α=0.3  + λ-curriculum",
+    }
+    LINESTYLES = {
+        "SAC_orig": "--", "SAC_fixed": "-.", "SACPER_a03": "-", "SACPER_a06": ":",
+        "SACPER_n3": "-", "SACPER_n5": "-", "SAC_rewnorm": "-.", "SACPER_lam": "--",
+    }
+
+    def plot_curves(names, title, ylabel="Discounted return", clip_lo=-300, figsize=(13, 5), ncol=2):
+        fig, ax = plt.subplots(figsize=figsize)
+        for name in names:
+            if name not in agg or agg[name] is None: continue
+            a = agg[name]
+            xs = a["steps"] / 1000
+            m, lo, hi = a["mean_r"], a["lo_r"], a["hi_r"]
+            m, lo, hi  = np.clip(m, clip_lo, 0), np.clip(lo, clip_lo, 0), np.clip(hi, clip_lo, 0)
+            c, ls = COLORS.get(name, "gray"), LINESTYLES.get(name, "-")
+            ax.plot(xs, m, color=c, lw=2, ls=ls, label=LABELS.get(name, name))
+            ax.fill_between(xs, lo, hi, color=c, alpha=0.15)
+        ax.axhline(MPC_BASELINE, color="black", lw=1, ls=":", alpha=0.6)
+        ax.set_xlabel("Training steps (×1 000)", fontsize=11)
+        ax.set_ylabel(ylabel, fontsize=11)
+        ax.set_title(title, fontsize=12)
+        ax.legend(fontsize=9, ncol=ncol, loc="lower right")
+        ax.grid(axis="y", alpha=0.3)
+        if clip_lo is not None: ax.set_ylim(bottom=clip_lo - 5)
+        plt.tight_layout()
+        safe_title = title.replace(' ', '_').replace('—', '').replace('(', '').replace(')', '').replace('=', '')
+        plt.savefig(f"results/fig_{safe_title.lower()}.pdf", bbox_inches="tight")
+        plt.close()
+
+    os.makedirs("results", exist_ok=True)
+
+    # 1. Learning curves
+    plot_curves(["SAC_orig", "SAC_fixed", "SACPER_a03"], "Core ablation - PER vs stability fixes", clip_lo=-300)
+    plot_curves(["SAC_fixed", "SACPER_a03", "SACPER_a06"], "PER exponent sensitivity", clip_lo=-300)
+    plot_curves(["SACPER_a03", "SACPER_n3", "SACPER_n5"], "N-step returns comparison", clip_lo=-300)
+    plot_curves(["SAC_orig", "SAC_fixed", "SAC_rewnorm", "SACPER_lam"], "Reward shaping alternatives", clip_lo=-300)
+
+    # 2. Priority distribution evolution
+    per_variants = [n for n in ["SACPER_a03", "SACPER_a06", "SACPER_n3", "SACPER_n5", "SACPER_lam"] if n in agg and agg[n] is not None]
+    if per_variants:
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+        for name in per_variants:
+            a = agg[name]
+            xs = a["steps"] / 1000
+            c, ls, lab = COLORS.get(name, "gray"), LINESTYLES.get(name, "-"), LABELS.get(name, name)
+            axes[0].plot(xs, a["mean_gini"], color=c, lw=2, ls=ls, label=lab)
+            axes[1].plot(xs, a["mean_ess"], color=c, lw=2, ls=ls, label=lab)
+            axes[2].plot(xs, a["mean_ent"], color=c, lw=2, ls=ls, label=lab)
+        for ax, (title, ylabel, ref) in zip(axes, [
+            ("Priority Gini coefficient", "Gini (0=uniform, 1=degenerate)", 0),
+            ("Normalised ESS", "ESS / buffer_size (1=uniform)", 1.0),
+            ("Normalised priority entropy", "H / H_max  (1=uniform)", 1.0),
+        ]):
+            ax.axhline(ref, lw=1, ls=":", color="gray", alpha=0.6)
+            ax.set_title(title, fontsize=11); ax.set_ylabel(ylabel, fontsize=9); ax.set_xlabel("Steps (×1k)", fontsize=9)
+            ax.legend(fontsize=8); ax.grid(axis="y", alpha=0.3)
+        plt.suptitle("Priority distribution evolution during training", fontsize=12)
+        plt.tight_layout()
+        plt.savefig("results/fig_priority_distribution.pdf", bbox_inches="tight")
+        plt.close()
+
+    # 3. Q-value overestimation bias
+    fig, ax = plt.subplots(figsize=(13, 5))
+    for name in ["SAC_orig","SAC_fixed","SACPER_a03","SACPER_a06","SACPER_n3","SACPER_n5","SAC_rewnorm","SACPER_lam"]:
+        if name not in agg or agg[name] is None: continue
+        a = agg[name]
+        ax.plot(a["steps"]/1000, a["mean_qbias"], color=COLORS.get(name,"gray"), lw=2, ls=LINESTYLES.get(name,"-"), label=LABELS.get(name, name))
+    ax.axhline(0, lw=1, ls="-", color="black", alpha=0.5)
+    ax.set_title("Q-value overestimation bias  (positive = overestimation)", fontsize=12)
+    ax.set_xlabel("Steps (×1k)", fontsize=11); ax.set_ylabel("Q_pred(s₀,a₀) − G₀  (discounted return)", fontsize=11)
+    ax.legend(fontsize=9, ncol=2, loc="upper right"); ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    plt.savefig("results/fig_q_overestimation.pdf", bbox_inches="tight")
+    plt.close()
+
+    # 4. N-step returns deep-dive
+    nstep_names = ["SACPER_a03", "SACPER_n3", "SACPER_n5"]
+    nstep_names = [n for n in nstep_names if n in agg and agg[n] is not None]
+    if nstep_names:
+        fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+        ax = axes[0]
+        for name in nstep_names:
+            a = agg[name]
+            m = np.clip(a["mean_r"], -300, 0)
+            lo = np.clip(a["lo_r"], -300, 0)
+            hi = np.clip(a["hi_r"], -300, 0)
+            c = COLORS.get(name, "gray")
+            ax.plot(a["steps"]/1000, m, color=c, lw=2, label=LABELS.get(name, name))
+            ax.fill_between(a["steps"]/1000, lo, hi, color=c, alpha=0.15)
+        ax.axhline(MPC_BASELINE, lw=1, ls=":", color="gray", alpha=0.6)
+        ax.set_title("N-step — learning curves", fontsize=11)
+        ax.set_xlabel("Steps (×1k)", fontsize=9)
+        ax.set_ylabel("Discounted return", fontsize=9)
+        ax.legend(fontsize=9); ax.grid(axis="y", alpha=0.3)
+        ax.set_ylim(bottom=-305)
+
+        ax = axes[1]
+        xticks, xlabs, xpos = [], [], []
+        pos = 1
+        for name in nstep_names:
+            logs = all_logs.get(name, [])
+            final_returns = [l["returns"][-1] for l in logs if l.get("returns")]
+            if not final_returns: continue
+            ax.boxplot(final_returns, positions=[pos], widths=0.5, patch_artist=True, notch=False, boxprops=dict(facecolor=COLORS.get(name,"gray"), alpha=0.6), medianprops=dict(color="black", lw=2), whiskerprops=dict(lw=1.5), capprops=dict(lw=1.5), flierprops=dict(marker="o", markersize=4))
+            n_cfg = EXPERIMENTS[name].n_step
+            xlabs.append(f"n={n_cfg}")
+            xpos.append(pos)
+            pos += 1
+        ax.set_xticks(xpos); ax.set_xticklabels(xlabs, fontsize=10)
+        ax.axhline(MPC_BASELINE, lw=1, ls=":", color="gray", alpha=0.6)
+        ax.set_title("N-step — final return distribution", fontsize=11)
+        ax.set_ylabel("Final eval return", fontsize=9)
+        ax.grid(axis="y", alpha=0.3)
+        plt.suptitle("N-step returns with PER  (all seeds)", fontsize=12)
+        plt.tight_layout()
+        plt.savefig("results/fig_nstep_comparison.pdf", bbox_inches="tight")
+        plt.close()
+
+    # 5. Alpha (entropy temperature) decay
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4))
+    groups = {
+        "SAC variants (LR=3e-5 vs 1e-5)": ["SAC_orig", "SAC_fixed", "SAC_rewnorm"],
+        "PER variants (LR=1e-5 all)":      ["SACPER_a03", "SACPER_a06", "SACPER_n3", "SACPER_n5"],
+    }
+    for ax, (gtitle, names) in zip(axes, groups.items()):
+        for name in names:
+            if name not in agg or agg[name] is None: continue
+            a = agg[name]
+            ax.plot(a["steps"]/1000, a["mean_alpha"], color=COLORS.get(name,"gray"), lw=2, ls=LINESTYLES.get(name,"-"), label=LABELS.get(name, name))
+        ax.axhline(ALPHA_FLOOR, lw=1, ls=":", color="gray", alpha=0.6)
+        ax.text(0, ALPHA_FLOOR + 0.003, f" α floor ({ALPHA_FLOOR})", fontsize=8, color="gray")
+        ax.set_title(gtitle, fontsize=11)
+        ax.set_xlabel("Steps (×1k)", fontsize=9)
+        ax.set_ylabel("α  (entropy temperature)", fontsize=9)
+        ax.legend(fontsize=8); ax.grid(axis="y", alpha=0.3)
+        ax.set_ylim(0, 0.22)
+    plt.suptitle("Entropy temperature α decay", fontsize=12)
+    plt.tight_layout()
+    plt.savefig("results/fig_alpha_decay.pdf", bbox_inches="tight")
+    plt.close()
+
+    # 6. Save statistical tables to text file along with console
+    summary_output = ["\nStatistical analysis: IQM + Summary Table\n" + "="*90]
+    final_by_exp = {n: [l["returns"][-1] for l in logs if l.get("returns")] for n, logs in all_logs.items() if any(l.get("returns") for l in logs)}
+    
+    header = f"{'Experiment':18s} {'FinalReturn':>12} {'IQM':>8} {'StepsTo-25':>11} {'AvgQbias':>10} {'AvgGini':>9} {'AvgESS':>8}"
+    summary_output.append(header)
+    summary_output.append("-" * 90)
+
+    def steps_to_threshold(log, threshold=-25.0):
+        for s, r in zip(log["steps"], log["returns"]):
+            if r >= threshold: return s
+        return None
+
+    for name in list(EXPERIMENTS.keys()):
+        if name not in all_logs or not all_logs[name]: continue
+        logs  = all_logs[name]
+        try:
+            final = np.mean([l["returns"][-1] for l in logs if l.get("returns")])
+            arr = np.array([l["returns"][-1] for l in logs if l.get("returns")])
+            iq = float(np.mean(arr[(arr >= np.percentile(arr, 25)) & (arr <= np.percentile(arr, 75))])) if len(arr) > 0 else float('nan')
+        except:
+            final, iq = float('nan'), float('nan')
+        
+        stts  = [steps_to_threshold(l) for l in logs]
+        stts  = [s for s in stts if s is not None]
+        st_str = f"{int(np.mean(stts)):>6,}" if stts else "  never"
+        qb    = np.mean([np.mean(l["q_bias"]) for l in logs if l.get("q_bias")])
+        gini  = np.mean([np.mean(l["priority_gini"]) for l in logs if l.get("priority_gini")])
+        ess   = np.mean([np.mean(l["priority_ess"])  for l in logs if l.get("priority_ess")])
+        
+        summary_row = f"{name:18s} {final:>12.2f} {iq:>8.2f} {st_str:>11s} {qb:>10.2f} {gini:>9.4f} {ess:>8.4f}"
+        summary_output.append(summary_row)
+        print(summary_row)
+    
+    summary_output.append("=" * 90)
+    with open("results/statistical_summary.txt", "w") as f:
+        f.write("\n".join(summary_output))
+
+    print("Finished plotting all tracked metrics to the 'results' directory.")
 
