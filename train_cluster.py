@@ -857,7 +857,7 @@ if __name__ == '__main__':
     os.environ['OMP_NUM_THREADS'] = '1'
     os.environ['MKL_NUM_THREADS'] = '1'
     multiprocessing.set_start_method('spawn', force=True)
-    # Using 24 workers to run all 8 experiments * 3 seeds in pure parallel
-    # on an i9 with 24 threads and 100GB RAM, this is extremely fast!
-    all_logs = run_all_experiments(max_workers=24)
+    # Using 20 workers to leave some overhead for the OS and context switching
+    # on an i9 with 24 threads and 100GB RAM, this is still extremely fast!
+    all_logs = run_all_experiments(max_workers=20)
 

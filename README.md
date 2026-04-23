@@ -35,7 +35,7 @@ To run all 24 configurations simultaneously (8 experiments × 3 seeds):
 python train_cluster.py and train_local.py
 ```
 
-This will run silently and natively lock Python to 1 PyTorch thread per worker so the CPU handles the 24 parallel streams effortlessly. All completed runs will automatically deposit `.pkl` log data into the `results/` directory.
+This will run silently and natively lock Python to 1 PyTorch thread per worker so the CPU handles the parallel streams effortlessly. All completed runs will automatically deposit `.pkl` log data into the `results/` directory.
 
 ## Graphing
 
