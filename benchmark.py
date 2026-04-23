@@ -17,7 +17,9 @@ elapsed = time.time() - t0
 
 ms_per_step = elapsed / 10_000 * 1000
 total_hours = (ms_per_step / 1000) * 300_000 * 24 / 4 / 3600
+total_hours_cluster = (ms_per_step / 1000) * 300_000 * 24 / 20 / 3600
 
 print(f"ms per step: {ms_per_step:.2f}")
 print(f"Projected total (24 runs, 4 workers): {total_hours:.1f} hours")
+print(f"Projected total (24 runs, 20 workers): {total_hours_cluster:.1f} hours")
 env.close()
